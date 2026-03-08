@@ -36,12 +36,16 @@ router.get('/status', async (_req, res) => {
     axios.get(`${process.env.KIBANA_URL ?? 'http://kibana:5601'}/api/status`, { auth: { username: process.env.KIBANA_USER ?? 'elastic', password: process.env.KIBANA_PASSWORD ?? '' }, timeout: 5000 }).then(() => ({ service: 'kibana', status: 'ok' })),
     axios.get('https://api.github.com/rate_limit', { headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN ?? ''}` }, timeout: 5000 }).then(() => ({ service: 'github', status: 'ok' })),
     axios.get(`${process.env.PORTAINER_URL ?? 'http://portainer:9000'}/api/status`, { headers: { 'X-API-Key': process.env.PORTAINER_TOKEN ?? '' }, timeout: 5000 }).then(() => ({ service: 'portainer', status: 'ok' })),
+    axios.get(`${process.env.GRAFANA_URL ?? 'http://grafana:3000'}/api/health`, {
+      headers: process.env.GRAFANA_TOKEN ? { Authorization: `Bearer ${process.env.GRAFANA_TOKEN}` } : {},
+      timeout: 5000,
+    }).then((r) => ({ service: 'grafana', status: 'ok', version: (r.data as Record<string, string>).version })),
   ]);
 
-  const results = checks.map((r, i) => {
-    const services = ['jenkins', 'kibana', 'github', 'portainer'];
-    return r.status === 'fulfilled' ? r.value : { service: services[i], status: 'error', error: (r.reason as Error).message };
-  });
+  const services = ['jenkins', 'kibana', 'github', 'portainer', 'grafana'];
+  const results = checks.map((r, i) =>
+    r.status === 'fulfilled' ? r.value : { service: services[i], status: 'error', error: (r.reason as Error).message }
+  );
 
   res.json({ success: true, data: results, timestamp: new Date().toISOString() });
 });

@@ -1,15 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { alertsApi } from '../services/api';
-import { AlertRule } from '@shared/types';
+import { alertsApi, grafanaApi } from '../services/api';
+import { AlertRule, GrafanaHealth, GrafanaAlertRule } from '@shared/types';
 
 export default function Settings() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState('');
+  const [grafanaHealth, setGrafanaHealth] = useState<GrafanaHealth | null>(null);
+  const [grafanaHealthError, setGrafanaHealthError] = useState(false);
+  const [grafanaRules, setGrafanaRules] = useState<GrafanaAlertRule[]>([]);
+  const [grafanaRulesLoading, setGrafanaRulesLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
     alertsApi.listRules().then(setRules).catch(() => {}).finally(() => setLoading(false));
+
+    grafanaApi.health()
+      .then((h) => { setGrafanaHealth(h); setGrafanaHealthError(false); })
+      .catch(() => setGrafanaHealthError(true));
+
+    setGrafanaRulesLoading(true);
+    grafanaApi.listAlertRules()
+      .then(setGrafanaRules)
+      .catch(() => {})
+      .finally(() => setGrafanaRulesLoading(false));
   }, []);
 
   async function toggleRule(id: string, enabled: boolean) {
@@ -53,12 +67,84 @@ export default function Settings() {
             { label: '🐳 Portainer', keys: ['PORTAINER_URL', 'PORTAINER_TOKEN'] },
             { label: '🤖 AI', keys: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] },
             { label: '💬 Slack', keys: ['SLACK_WEBHOOK_URL'] },
+            { label: '📈 Grafana', keys: ['GRAFANA_URL', 'GRAFANA_TOKEN'] },
           ].map(({ label, keys }) => (
             <div key={label} style={{ padding: '10px 12px', background: '#0d1117', borderRadius: 6 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3', marginBottom: 6 }}>{label}</div>
               {keys.map((k) => (
                 <code key={k} style={{ display: 'block', fontSize: 10, color: '#8b949e' }}>{k}</code>
               ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Grafana Connection Status */}
+      <div style={{ marginBottom: 28, padding: 16, background: '#161b22', border: '1px solid #30363d', borderRadius: 10 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 700, color: '#e6edf3', marginBottom: 12 }}>Grafana Connection</h2>
+        {grafanaHealthError ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f8514922', border: '1px solid #f8514944', borderRadius: 6 }}>
+            <span style={{ fontSize: 14 }}>●</span>
+            <span style={{ fontSize: 13, color: '#f85149' }}>Grafana unreachable — check <code style={{ background: '#21262d', padding: '1px 5px', borderRadius: 3 }}>GRAFANA_URL</code> and <code style={{ background: '#21262d', padding: '1px 5px', borderRadius: 3 }}>GRAFANA_TOKEN</code></span>
+          </div>
+        ) : grafanaHealth ? (
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ padding: '10px 14px', background: '#0d1117', borderRadius: 6, flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>STATUS</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: '#3fb950', fontSize: 12 }}>●</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#3fb950' }}>Connected</span>
+              </div>
+            </div>
+            <div style={{ padding: '10px 14px', background: '#0d1117', borderRadius: 6, flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>VERSION</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3' }}>{grafanaHealth.version}</div>
+            </div>
+            <div style={{ padding: '10px 14px', background: '#0d1117', borderRadius: 6, flex: 1, minWidth: 140 }}>
+              <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>DATABASE</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: grafanaHealth.database === 'ok' ? '#3fb950' : '#f85149', fontSize: 12 }}>●</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: grafanaHealth.database === 'ok' ? '#3fb950' : '#f85149' }}>
+                  {grafanaHealth.database}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: '#8b949e' }}>Checking Grafana connection…</div>
+        )}
+      </div>
+
+      {/* Grafana Alert Rules */}
+      <div style={{ marginBottom: 28, padding: 16, background: '#161b22', border: '1px solid #30363d', borderRadius: 10 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 700, color: '#e6edf3', marginBottom: 4 }}>Grafana Alert Rules</h2>
+        <p style={{ fontSize: 13, color: '#8b949e', marginBottom: 12 }}>Provisioned alert rules from Grafana. Manage pause state and thresholds directly in Grafana.</p>
+        {grafanaRulesLoading && <div style={{ fontSize: 13, color: '#8b949e' }}>Loading Grafana rules…</div>}
+        {!grafanaRulesLoading && grafanaRules.length === 0 && (
+          <div style={{ fontSize: 13, color: '#8b949e' }}>No Grafana alert rules found. Ensure <code style={{ background: '#21262d', padding: '1px 5px', borderRadius: 3 }}>GRAFANA_URL</code> and <code style={{ background: '#21262d', padding: '1px 5px', borderRadius: 3 }}>GRAFANA_TOKEN</code> are configured.</div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {grafanaRules.map((rule) => (
+            <div key={rule.uid} style={{
+              padding: '12px 14px', background: '#0d1117', border: '1px solid #30363d', borderRadius: 6,
+              opacity: rule.isPaused ? 0.55 : 1,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3' }}>{rule.title}</span>
+                    {rule.isPaused && (
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3, background: '#d2992222', color: '#d29922' }}>PAUSED</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, color: '#8b949e' }}>Group: <span style={{ color: '#58a6ff' }}>{rule.ruleGroup}</span></span>
+                    <span style={{ fontSize: 11, color: '#8b949e' }}>Condition: <span style={{ color: '#58a6ff' }}>{rule.condition}</span></span>
+                    <span style={{ fontSize: 11, color: '#8b949e' }}>No data: <span style={{ color: '#e6edf3' }}>{rule.noDataState}</span></span>
+                    <span style={{ fontSize: 11, color: '#8b949e' }}>Exec error: <span style={{ color: '#e6edf3' }}>{rule.execErrState}</span></span>
+                  </div>
+                </div>
+              </div>
             </div>
           ))}
         </div>
