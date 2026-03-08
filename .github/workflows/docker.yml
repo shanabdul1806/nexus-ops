@@ -6,35 +6,30 @@ on:
     tags: ['v*.*.*']
   pull_request:
     branches: [main]
+  workflow_dispatch:        # allow manual trigger from GitHub UI
 
 env:
-  REGISTRY: docker.io
   BACKEND_IMAGE: ccdlvc/nexus-ops-backend
   DASHBOARD_IMAGE: ccdlvc/nexus-ops-dashboard
 
 jobs:
-  build:
+  # ── Backend ───────────────────────────────────────────────────────────────
+  backend:
+    name: Backend image
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────────
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ── QEMU — needed for arm64 cross-compilation ────────────────────────
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-        with:
-          platforms: linux/amd64,linux/arm64
 
-      # ── Buildx ──────────────────────────────────────────────────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ── Login to Docker Hub (skipped on PRs) ───────────────────────────────
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -42,9 +37,8 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # ── Metadata for backend ────────────────────────────────────────────────
-      - name: Extract metadata (backend)
-        id: meta-backend
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.BACKEND_IMAGE }}
@@ -54,9 +48,44 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # ── Metadata for dashboard ──────────────────────────────────────────────
-      - name: Extract metadata (dashboard)
-        id: meta-dashboard
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+  # ── Dashboard ─────────────────────────────────────────────────────────────
+  dashboard:
+    name: Dashboard image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DASHBOARD_IMAGE }}
@@ -66,39 +95,32 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # ── Build & push backend ────────────────────────────────────────────────
-      - name: Build and push backend image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: backend/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # ── Build & push dashboard ──────────────────────────────────────────────
-      - name: Build and push dashboard image
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: dashboard/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta-dashboard.outputs.tags }}
-          labels: ${{ steps.meta-dashboard.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=dashboard
+          cache-to: type=gha,scope=dashboard,mode=max
 
-      # ── Summary ─────────────────────────────────────────────────────────────
-      - name: Write job summary
-        if: github.event_name != 'pull_request'
+  # ── Summary ───────────────────────────────────────────────────────────────
+  summary:
+    name: Job summary
+    runs-on: ubuntu-latest
+    needs: [backend, dashboard]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Write summary
         run: |
           echo "### Docker images published 🐳" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Tags |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| \`${{ env.BACKEND_IMAGE }}\` | \`${{ steps.meta-backend.outputs.tags }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`${{ env.DASHBOARD_IMAGE }}\` | \`${{ steps.meta-dashboard.outputs.tags }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.BACKEND_IMAGE }}\` | \`latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.DASHBOARD_IMAGE }}\` | \`latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
