@@ -3,21 +3,24 @@
  * @description Provider-agnostic AI wrapper for Nexus Ops.
  *
  * Selects the active AI provider at construction time based on environment
- * variables:
+ * variables (checked in priority order):
  *   - ANTHROPIC_API_KEY → uses Claude (default model: claude-opus-4-6)
  *   - OPENAI_API_KEY    → uses GPT-4o (default model: gpt-4o)
- *   - neither set       → stub mode (returns a JSON hint to configure a key)
+ *   - GEMINI_API_KEY    → uses Gemini (default model: gemini-1.5-pro)
+ *   - none set          → stub mode (returns a JSON hint to configure a key)
  *
  * Consumed by: RootCauseAnalyzer, AnomalyDetector, ReportGenerator, query route.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { QueryResponse, DataSource } from '../../../shared/types';
 import { logger } from '../utils/logger';
 
 export class AIAgent {
   private anthropic?: Anthropic;
   private openai?: OpenAI;
+  private gemini?: GoogleGenerativeAI;
   private model: string;
 
   constructor() {
@@ -29,6 +32,10 @@ export class AIAgent {
       this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       this.model = process.env.OPENAI_MODEL ?? 'gpt-4o';
       logger.info('AI Agent using OpenAI GPT-4o');
+    } else if (process.env.GEMINI_API_KEY) {
+      this.gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      this.model = process.env.GEMINI_MODEL ?? 'gemini-1.5-pro';
+      logger.info('AI Agent using Google Gemini');
     } else {
       this.model = 'stub';
       logger.warn('No AI API key configured — responses will be stubbed');
@@ -65,8 +72,22 @@ export class AIAgent {
         return text;
       }
 
+      if (this.gemini) {
+        const model = this.gemini.getGenerativeModel({
+          model: this.model,
+          systemInstruction: systemPrompt,
+        });
+        const result = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+          generationConfig: { maxOutputTokens: maxTokens },
+        });
+        const text = result.response.text();
+        logger.debug(`Gemini response in ${Date.now() - start}ms (${text.length} chars)`);
+        return text;
+      }
+
       // Stub (no API key)
-      return JSON.stringify({ stub: true, message: 'Configure ANTHROPIC_API_KEY or OPENAI_API_KEY for live AI responses.' });
+      return JSON.stringify({ stub: true, message: 'Configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY for live AI responses.' });
     } catch (err) {
       logger.error('AIAgent.chat failed', { err });
       throw err;
