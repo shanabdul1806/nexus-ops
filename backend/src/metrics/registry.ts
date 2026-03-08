@@ -6,6 +6,8 @@
  */
 import { Registry, Gauge, Counter, collectDefaultMetrics } from 'prom-client';
 import { db } from '../storage/db';
+import { incidents, alerts } from '../storage/schema';
+import { isNull, count, sql } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 
 export const metricsRegistry = new Registry();
@@ -38,23 +40,26 @@ export const alertsTotal = new Counter({
 
 // ─── Refresh gauges from DB ───────────────────────────────────────────────────
 
-/** Call periodically (or on each /metrics scrape) to update DB-backed gauges */
-export function refreshMetrics(): void {
+/** Call on each /metrics scrape to update DB-backed gauges */
+export async function refreshMetrics(): Promise<void> {
   try {
     // Incidents by status × severity
     incidentsGauge.reset();
-    const incRows = db.prepare(
-      `SELECT status, severity, COUNT(*) AS cnt FROM incidents GROUP BY status, severity`
-    ).all() as Array<{ status: string; severity: string; cnt: number }>;
+    const incRows = await db
+      .select({ status: incidents.status, severity: incidents.severity, cnt: count() })
+      .from(incidents)
+      .groupBy(incidents.status, incidents.severity);
     for (const row of incRows) {
       incidentsGauge.set({ status: row.status, severity: row.severity }, row.cnt);
     }
 
     // Active alerts by severity
     alertsGauge.reset();
-    const alertRows = db.prepare(
-      `SELECT severity, COUNT(*) AS cnt FROM alerts WHERE resolved_at IS NULL GROUP BY severity`
-    ).all() as Array<{ severity: string; cnt: number }>;
+    const alertRows = await db
+      .select({ severity: alerts.severity, cnt: count() })
+      .from(alerts)
+      .where(isNull(alerts.resolvedAt))
+      .groupBy(alerts.severity);
     for (const row of alertRows) {
       alertsGauge.set({ severity: row.severity }, row.cnt);
     }

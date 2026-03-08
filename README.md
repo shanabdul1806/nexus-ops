@@ -272,6 +272,13 @@ All variables are optional except an AI provider key. The backend logs a warning
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook URL |
 | `TEAMS_WEBHOOK_URL` | Microsoft Teams webhook URL |
 
+### Database
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | set by compose | PostgreSQL connection string — automatically set to the bundled `postgres` service when using docker-compose. For an external database: `postgresql://user:pass@host:5432/nexus` |
+| `POSTGRES_PASSWORD` | `change_me_in_production` | Password for the bundled postgres service (used by docker-compose to initialise the database) |
+
 ### Server
 
 | Variable | Default | Description |
@@ -280,7 +287,6 @@ All variables are optional except an AI provider key. The backend logs a warning
 | `LOG_LEVEL` | `info` | Winston log level |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | CORS origins (comma-separated) |
 | `DASHBOARD_URL` | `http://localhost:3000` | Dashboard URL for links in reports |
-| `DB_PATH` | `./data/copilot.db` | SQLite database path |
 
 ### AWS
 

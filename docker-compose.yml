@@ -1,6 +1,24 @@
 version: '3.9'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+    volumes:
+      - nexus-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nexus-net
+
   nexus-backend:
     build:
       context: .
@@ -14,6 +32,7 @@ services:
       - NODE_ENV=production
       - PORT=4000
       - LOG_LEVEL=info
+      - DATABASE_URL=postgresql://nexus:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/nexus
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-opus-4-6}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -40,7 +59,6 @@ services:
       - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL}
       - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:3000}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
-      - DB_PATH=/app/data/nexus.db
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=${AWS_REGION:-us-east-1}
@@ -54,14 +72,16 @@ services:
       - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}
       - AZURE_LOG_ANALYTICS_WORKSPACE_ID=${AZURE_LOG_ANALYTICS_WORKSPACE_ID}
     volumes:
-      - nexus-data:/app/data
       - nexus-logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     networks:
       - nexus-net
 
@@ -147,7 +167,7 @@ services:
       - nexus-net
 
 volumes:
-  nexus-data:
+  nexus-pg-data:
   nexus-logs:
   prometheus-data:
   grafana-data:

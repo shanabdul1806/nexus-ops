@@ -10,8 +10,9 @@ COPY backend/package*.json backend/tsconfig.json backend/tsconfig.test.json ./ba
 WORKDIR /workspace/backend
 RUN npm install
 
-# Copy backend source
+# Copy backend source and Drizzle migrations, then build
 COPY backend/src ./src
+COPY backend/drizzle ./drizzle
 RUN npm run build
 
 # ─── Runner stage ─────────────────────────────────────────────────────────────
@@ -22,9 +23,10 @@ ENV NODE_ENV=production
 
 COPY --from=builder /workspace/backend/dist ./dist
 COPY --from=builder /workspace/backend/node_modules ./node_modules
+COPY --from=builder /workspace/backend/drizzle ./drizzle
 COPY backend/package.json ./
 
-RUN mkdir -p data logs && chown -R node:node data logs
+RUN mkdir -p logs && chown -R node:node logs
 EXPOSE 4000
 USER node
 ENTRYPOINT ["dumb-init", "--"]

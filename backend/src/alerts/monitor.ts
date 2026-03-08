@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import schedule from 'node-schedule';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../storage/db';
+import { alerts, alertRules, incidents } from '../storage/schema';
 import { JenkinsConnector } from '../connectors/jenkins';
 import { KibanaConnector } from '../connectors/kibana';
 import { PortainerConnector } from '../connectors/portainer';
@@ -14,6 +15,7 @@ import { AIAgent } from '../ai/agent';
 import { AlertRule, Alert, DataSource } from '../../../shared/types';
 import { logger } from '../utils/logger';
 import { alertsTotal } from '../metrics/registry';
+import { eq, and, isNull, gt, sql } from 'drizzle-orm';
 
 export class AlertMonitor {
   private readonly agent = new AIAgent();
@@ -41,13 +43,12 @@ export class AlertMonitor {
   constructor(private readonly wss: WebSocketServer) {}
 
   start(): void {
-    // Run every 2 minutes
     schedule.scheduleJob('*/2 * * * *', () => this.poll().catch((err) => logger.error('Alert poll error', { err })));
     logger.info('AlertMonitor started — polling every 2 minutes');
   }
 
   private async poll(): Promise<void> {
-    const rules = db.prepare('SELECT * FROM alert_rules WHERE enabled = 1').all() as Record<string, unknown>[];
+    const rules = await db.select().from(alertRules).where(eq(alertRules.enabled, true));
 
     const [containers, builds, errorTrends, cloudMetrics] = await Promise.all([
       this.safeGetContainers(),
@@ -62,17 +63,12 @@ export class AlertMonitor {
     // Anomaly detection across all sources
     const anomalies = await this.detector.detectAll({ containers, builds, errorTrends });
 
-    // Map anomalies to alert rules and fire alerts
-    for (const rule of rules.map(this.rowToRule)) {
+    for (const rule of rules) {
       let value: number | undefined;
 
-      // Check anomaly detector results for on-premise sources
       const anomaly = anomalies.find((a) => a.source === rule.source && a.metric === rule.metric);
-      if (anomaly) {
-        value = anomaly.value;
-      }
+      if (anomaly) value = anomaly.value;
 
-      // Check cloud metrics directly for AWS/GCP/Azure rules
       if (value === undefined) {
         const cloudMetric = cloudMetrics.find((m) => m.source === rule.source && m.metric === rule.metric);
         if (cloudMetric) value = cloudMetric.value;
@@ -84,10 +80,16 @@ export class AlertMonitor {
       if (!triggered) continue;
 
       // Avoid duplicate alerts (same rule in last 10 minutes)
-      const recent = db.prepare(
-        'SELECT id FROM alerts WHERE rule_id = ? AND triggered_at > datetime(\'now\', \'-10 minutes\') AND resolved_at IS NULL LIMIT 1'
-      ).get(rule.id);
-      if (recent) continue;
+      const recent = await db
+        .select({ id: alerts.id })
+        .from(alerts)
+        .where(and(
+          eq(alerts.ruleId, rule.id),
+          isNull(alerts.resolvedAt),
+          gt(alerts.triggeredAt, sql`now() - interval '10 minutes'`),
+        ))
+        .limit(1);
+      if (recent.length) continue;
 
       const alert: Alert = {
         id: uuidv4(),
@@ -102,25 +104,35 @@ export class AlertMonitor {
         acknowledged: false,
       };
 
-      db.prepare(
-        'INSERT INTO alerts (id, rule_id, rule_name, severity, source, message, value, threshold) VALUES (?,?,?,?,?,?,?,?)'
-      ).run(alert.id, alert.ruleId, alert.ruleName, alert.severity, alert.source, alert.message, alert.value, alert.threshold);
-
-      // Auto-create a matching incident so it appears in the Incidents page
       const incId = `inc-${alert.id}`;
-      db.prepare(`
-        INSERT OR IGNORE INTO incidents
-          (id, title, summary, severity, status, root_cause, fixes_json, correlations_json, affected_services_json, tags_json)
-        VALUES (?, ?, ?, ?, 'open', ?, '[]', '[]', ?, ?)
-      `).run(
-        incId,
-        alert.ruleName,
-        alert.message,
-        alert.severity,
-        `${alert.ruleName} triggered on source "${alert.source}": measured value ${alert.value} exceeded threshold ${alert.threshold}. ${alert.message}`,
-        JSON.stringify([alert.source]),
-        JSON.stringify([alert.source, alert.severity]),
-      );
+
+      // Atomic: insert alert + matching incident together
+      await db.transaction(async (tx) => {
+        await tx.insert(alerts).values({
+          id:          alert.id,
+          ruleId:      alert.ruleId,
+          ruleName:    alert.ruleName,
+          severity:    alert.severity,
+          source:      alert.source,
+          message:     alert.message,
+          value:       alert.value,
+          threshold:   alert.threshold,
+          triggeredAt: new Date(alert.triggeredAt),
+        });
+
+        await tx.insert(incidents).values({
+          id:              incId,
+          title:           alert.ruleName,
+          summary:         alert.message,
+          severity:        alert.severity,
+          status:          'open',
+          rootCause:       `${alert.ruleName} triggered on source "${alert.source}": measured value ${alert.value} exceeded threshold ${alert.threshold}. ${alert.message}`,
+          fixes:           [],
+          correlations:    [],
+          affectedServices:[alert.source],
+          tags:            [alert.source, alert.severity],
+        }).onConflictDoNothing();
+      });
 
       alertsTotal.inc({ severity: alert.severity, source: alert.source });
       this.broadcast({ type: 'alert', data: alert });
@@ -137,21 +149,12 @@ export class AlertMonitor {
 
   private evaluateCondition(value: number, condition: AlertRule['condition'], threshold: number): boolean {
     switch (condition) {
-      case 'gt': return value > threshold;
+      case 'gt':  return value >  threshold;
       case 'gte': return value >= threshold;
-      case 'lt': return value < threshold;
+      case 'lt':  return value <  threshold;
       case 'lte': return value <= threshold;
-      case 'eq': return value === threshold;
+      case 'eq':  return value === threshold;
     }
-  }
-
-  private rowToRule(r: Record<string, unknown>): AlertRule {
-    return {
-      id: r.id as string, name: r.name as string, source: r.source as AlertRule['source'],
-      metric: r.metric as string, condition: r.condition as AlertRule['condition'],
-      threshold: r.threshold as number, severity: r.severity as AlertRule['severity'],
-      message: r.message as string, enabled: r.enabled === 1,
-    };
   }
 
   private async safeGetContainers() {
@@ -160,7 +163,6 @@ export class AlertMonitor {
       const endpoints = await this.portainer.listEndpoints();
       if (!endpoints.length) return [];
       const envId = parseInt(process.env.PORTAINER_ENDPOINT ?? '0', 10);
-      // Prefer the configured endpoint if it exists in the list, otherwise fall back to first online
       const target = envId > 0
         ? (endpoints.find((e) => e.id === envId) ?? endpoints.find((e) => e.status === 1))
         : endpoints.find((e) => e.status === 1);
@@ -185,7 +187,6 @@ export class AlertMonitor {
     } catch { return []; }
   }
 
-  /** Compute a flat list of {source, metric, value} for cloud resources. */
   private async safeGetCloudMetrics(): Promise<Array<{ source: DataSource; metric: string; value: number }>> {
     const metrics: Array<{ source: DataSource; metric: string; value: number }> = [];
 
@@ -255,11 +256,6 @@ export class AlertMonitor {
     return metrics;
   }
 
-  /**
-   * Fetch active Grafana Alertmanager instances and ingest each firing alert
-   * directly into the platform — bypassing the threshold-rule system because
-   * Grafana has already evaluated its own rules.
-   */
   private async safeIngestGrafanaAlerts(): Promise<void> {
     if (!process.env.GRAFANA_URL || !process.env.GRAFANA_TOKEN) return;
     try {
@@ -267,51 +263,62 @@ export class AlertMonitor {
       const firing = instances.filter((i) => i.state === 'active' || i.state === 'unprocessed');
 
       for (const instance of firing) {
-        // Use fingerprint as a stable dedup key (rule_id column)
         const ruleId = `grafana:${instance.fingerprint}`;
-        const recent = db.prepare(
-          `SELECT id FROM alerts WHERE rule_id = ? AND triggered_at > datetime('now', '-10 minutes') AND resolved_at IS NULL LIMIT 1`,
-        ).get(ruleId);
-        if (recent) continue;
+
+        const recent = await db
+          .select({ id: alerts.id })
+          .from(alerts)
+          .where(and(
+            eq(alerts.ruleId, ruleId),
+            isNull(alerts.resolvedAt),
+            gt(alerts.triggeredAt, sql`now() - interval '10 minutes'`),
+          ))
+          .limit(1);
+        if (recent.length) continue;
 
         const alert: Alert = {
-          id: uuidv4(),
+          id:           uuidv4(),
           ruleId,
-          ruleName: instance.name,
-          severity: instance.severity,
-          source: 'grafana',
-          message: instance.summary || instance.name,
-          value: 1,
-          threshold: 0,
-          triggeredAt: instance.startsAt,
+          ruleName:     instance.name,
+          severity:     instance.severity,
+          source:       'grafana',
+          message:      instance.summary || instance.name,
+          value:        1,
+          threshold:    0,
+          triggeredAt:  instance.startsAt,
           acknowledged: false,
         };
 
-        db.prepare(
-          `INSERT INTO alerts (id, rule_id, rule_name, severity, source, message, value, threshold, triggered_at)
-           VALUES (?,?,?,?,?,?,?,?,?)`,
-        ).run(
-          alert.id, alert.ruleId, alert.ruleName, alert.severity,
-          alert.source, alert.message, alert.value, alert.threshold,
-          alert.triggeredAt,
-        );
-
-        // Auto-create matching incident
         const incId = `inc-${alert.id}`;
         const folder = instance.folder ? `[${instance.folder}] ` : '';
-        db.prepare(`
-          INSERT OR IGNORE INTO incidents
-            (id, title, summary, severity, status, root_cause, fixes_json, correlations_json, affected_services_json, tags_json)
-          VALUES (?, ?, ?, ?, 'open', ?, '[]', '[]', ?, ?)
-        `).run(
-          incId,
-          `${folder}${instance.name}`,
-          instance.summary || instance.name,
-          instance.severity,
-          `Grafana alert "${instance.name}" is firing. ${instance.summary}`,
-          JSON.stringify(['grafana']),
-          JSON.stringify(['grafana', instance.severity, ...(instance.folder ? [instance.folder] : [])]),
-        );
+
+        // Atomic: insert alert + matching incident together
+        await db.transaction(async (tx) => {
+          await tx.insert(alerts).values({
+            id:          alert.id,
+            ruleId:      alert.ruleId,
+            ruleName:    alert.ruleName,
+            severity:    alert.severity,
+            source:      alert.source,
+            message:     alert.message,
+            value:       alert.value,
+            threshold:   alert.threshold,
+            triggeredAt: new Date(alert.triggeredAt),
+          });
+
+          await tx.insert(incidents).values({
+            id:              incId,
+            title:           `${folder}${instance.name}`,
+            summary:         instance.summary || instance.name,
+            severity:        instance.severity,
+            status:          'open',
+            rootCause:       `Grafana alert "${instance.name}" is firing. ${instance.summary}`,
+            fixes:           [],
+            correlations:    [],
+            affectedServices:['grafana'],
+            tags:            ['grafana', instance.severity, ...(instance.folder ? [instance.folder] : [])],
+          }).onConflictDoNothing();
+        });
 
         alertsTotal.inc({ severity: alert.severity, source: 'grafana' });
         this.broadcast({ type: 'alert', data: alert });

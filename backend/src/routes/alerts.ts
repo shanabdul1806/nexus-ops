@@ -1,63 +1,106 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../storage/db';
+import { alerts, alertRules } from '../storage/schema';
 import { Alert, AlertRule } from '../../../shared/types';
+import { eq, isNull, desc } from 'drizzle-orm';
 
 const router = Router();
 
 // GET /api/alerts — list active alerts
-router.get('/', (req: Request, res: Response) => {
-  const { resolved = 'false', limit = '50' } = req.query;
-  const sql = resolved === 'true'
-    ? 'SELECT * FROM alerts ORDER BY triggered_at DESC LIMIT ?'
-    : 'SELECT * FROM alerts WHERE resolved_at IS NULL ORDER BY triggered_at DESC LIMIT ?';
-  const rows = db.prepare(sql).all(parseInt(limit as string, 10)) as Record<string, unknown>[];
-  res.json({ success: true, data: rows.map(rowToAlert), timestamp: new Date().toISOString() });
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const { resolved = 'false', limit = '50' } = req.query;
+    const pageSize = parseInt(limit as string, 10);
+
+    const rows = resolved === 'true'
+      ? await db.select().from(alerts).orderBy(desc(alerts.triggeredAt)).limit(pageSize)
+      : await db.select().from(alerts).where(isNull(alerts.resolvedAt)).orderBy(desc(alerts.triggeredAt)).limit(pageSize);
+
+    res.json({ success: true, data: rows.map(rowToAlert), timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message, timestamp: new Date().toISOString() });
+  }
 });
 
 // PATCH /api/alerts/:id/acknowledge
-router.patch('/:id/acknowledge', (req: Request, res: Response) => {
-  db.prepare('UPDATE alerts SET acknowledged = 1 WHERE id = ?').run(req.params.id);
-  res.json({ success: true, data: { id: req.params.id, acknowledged: true }, timestamp: new Date().toISOString() });
+router.patch('/:id/acknowledge', async (req: Request, res: Response) => {
+  try {
+    await db.update(alerts).set({ acknowledged: true }).where(eq(alerts.id, req.params.id));
+    res.json({ success: true, data: { id: req.params.id, acknowledged: true }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message, timestamp: new Date().toISOString() });
+  }
 });
 
 // PATCH /api/alerts/:id/resolve
-router.patch('/:id/resolve', (req: Request, res: Response) => {
-  db.prepare('UPDATE alerts SET resolved_at = datetime(\'now\') WHERE id = ?').run(req.params.id);
-  res.json({ success: true, data: { id: req.params.id, resolvedAt: new Date().toISOString() }, timestamp: new Date().toISOString() });
+router.patch('/:id/resolve', async (req: Request, res: Response) => {
+  try {
+    const now = new Date();
+    await db.update(alerts).set({ resolvedAt: now }).where(eq(alerts.id, req.params.id));
+    res.json({ success: true, data: { id: req.params.id, resolvedAt: now.toISOString() }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message, timestamp: new Date().toISOString() });
+  }
 });
 
 // GET /api/alerts/rules
-router.get('/rules', (_req: Request, res: Response) => {
-  const rows = db.prepare('SELECT * FROM alert_rules').all() as Record<string, unknown>[];
-  res.json({ success: true, data: rows.map(rowToRule), timestamp: new Date().toISOString() });
+router.get('/rules', async (_req: Request, res: Response) => {
+  try {
+    const rows = await db.select().from(alertRules);
+    res.json({ success: true, data: rows.map(rowToRule), timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message, timestamp: new Date().toISOString() });
+  }
 });
 
 // PATCH /api/alerts/rules/:id — toggle rule or update threshold
-router.patch('/rules/:id', (req: Request, res: Response) => {
-  const { enabled, threshold } = req.body;
-  if (enabled !== undefined) db.prepare('UPDATE alert_rules SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, req.params.id);
-  if (threshold !== undefined) db.prepare('UPDATE alert_rules SET threshold = ? WHERE id = ?').run(threshold, req.params.id);
-  const row = db.prepare('SELECT * FROM alert_rules WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
-  if (!row) return res.status(404).json({ success: false, error: 'Rule not found', timestamp: new Date().toISOString() });
-  res.json({ success: true, data: rowToRule(row), timestamp: new Date().toISOString() });
+router.patch('/rules/:id', async (req: Request, res: Response) => {
+  try {
+    const { enabled, threshold } = req.body;
+    const updates: Partial<typeof alertRules.$inferInsert> = {};
+    if (enabled   !== undefined) updates.enabled   = Boolean(enabled);
+    if (threshold !== undefined) updates.threshold = Number(threshold);
+
+    if (Object.keys(updates).length) {
+      await db.update(alertRules).set(updates).where(eq(alertRules.id, req.params.id));
+    }
+
+    const [row] = await db.select().from(alertRules).where(eq(alertRules.id, req.params.id)).limit(1);
+    if (!row) return res.status(404).json({ success: false, error: 'Rule not found', timestamp: new Date().toISOString() });
+    res.json({ success: true, data: rowToRule(row), timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message, timestamp: new Date().toISOString() });
+  }
 });
 
-function rowToAlert(r: Record<string, unknown>): Alert {
+function rowToAlert(r: typeof alerts.$inferSelect): Alert {
   return {
-    id: r.id as string, ruleId: r.rule_id as string, ruleName: r.rule_name as string,
-    severity: r.severity as Alert['severity'], source: r.source as Alert['source'],
-    message: r.message as string, value: r.value as number, threshold: r.threshold as number,
-    triggeredAt: r.triggered_at as string, resolvedAt: r.resolved_at as string | undefined,
-    acknowledged: r.acknowledged === 1, incidentId: r.incident_id as string | undefined,
+    id:           r.id,
+    ruleId:       r.ruleId,
+    ruleName:     r.ruleName,
+    severity:     r.severity,
+    source:       r.source,
+    message:      r.message,
+    value:        r.value,
+    threshold:    r.threshold,
+    triggeredAt:  r.triggeredAt.toISOString(),
+    resolvedAt:   r.resolvedAt?.toISOString(),
+    acknowledged: r.acknowledged,
+    incidentId:   r.incidentId ?? undefined,
   };
 }
 
-function rowToRule(r: Record<string, unknown>): AlertRule {
+function rowToRule(r: typeof alertRules.$inferSelect): AlertRule {
   return {
-    id: r.id as string, name: r.name as string, source: r.source as AlertRule['source'],
-    metric: r.metric as string, condition: r.condition as AlertRule['condition'],
-    threshold: r.threshold as number, severity: r.severity as AlertRule['severity'],
-    message: r.message as string, enabled: r.enabled === 1,
+    id:        r.id,
+    name:      r.name,
+    source:    r.source,
+    metric:    r.metric,
+    condition: r.condition,
+    threshold: r.threshold,
+    severity:  r.severity,
+    message:   r.message,
+    enabled:   r.enabled,
   };
 }
 
