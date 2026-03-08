@@ -110,7 +110,7 @@ nexus-ops/
 │       │   ├── Dashboard.tsx       # Overview with live alert feed
 │       │   ├── Incidents.tsx       # Incident management
 │       │   ├── PortainerPage.tsx   # Portainer container view
-│       │   ├── GrafanaPage.tsx     # Embedded Grafana iframe
+│       │   ├── GrafanaPage.tsx     # Dashboard card grid, iframe embed (full + panel-grid), firing alerts
 │       │   ├── ReposPage.tsx       # GitHub repos/workflows
 │       │   ├── AWSPage.tsx         # EC2, ECS clusters/services, Lambda, cost breakdown
 │       │   ├── GCPPage.tsx         # Compute Engine, GKE clusters, Cloud Run services
@@ -380,8 +380,13 @@ Alternatively, mount a key file and set `GOOGLE_APPLICATION_CREDENTIALS=/path/to
 | `GET` | `/api/connectors/prometheus/query` | Instant PromQL query (`?query=...`) |
 | `GET` | `/api/connectors/prometheus/range` | Range PromQL query |
 | `GET` | `/api/connectors/prometheus/alerts` | Active Prometheus alerts |
-| `GET` | `/api/connectors/grafana/dashboards` | Grafana dashboard list |
-| `GET` | `/api/connectors/grafana/alerts` | Grafana alert rules |
+| `GET` | `/api/connectors/grafana/health` | Grafana server health (version, database state) |
+| `GET` | `/api/connectors/grafana/dashboards` | Dashboard list (`?query=&tags=` optional filters) |
+| `GET` | `/api/connectors/grafana/dashboards/:uid` | Dashboard detail including full panel definitions |
+| `GET` | `/api/connectors/grafana/datasources` | All configured datasources |
+| `GET` | `/api/connectors/grafana/datasources/:uid` | Single datasource by UID |
+| `GET` | `/api/connectors/grafana/alert-instances` | Active alert instances from Grafana Alertmanager (unified alerting, Grafana 9+; falls back to legacy `/api/alerts` for older versions) |
+| `GET` | `/api/connectors/grafana/alert-rules` | Provisioned alert rules (requires Admin/Editor token) |
 
 ### Connectors — AWS
 
@@ -459,9 +464,13 @@ Alternatively, mount a key file and set `GOOGLE_APPLICATION_CREDENTIALS=/path/to
 
 ---
 
-## Grafana Dashboard
+## Grafana Integration
 
-The pre-provisioned `nexus-overview` dashboard at `http://localhost:3001` includes:
+Nexus Ops integrates with Grafana on three levels: a pre-provisioned observability dashboard, an embedded live-view inside the Nexus dashboard UI, and automatic ingestion of Grafana firing alerts as native platform incidents.
+
+### Pre-provisioned dashboard
+
+When you run `docker compose up`, a `nexus-overview` dashboard is automatically provisioned at `http://localhost:3001` with the following panels:
 
 - **CI/CD** — Jenkins build success rate, build duration trends
 - **Error Rates** — Kibana error counts, error spikes
@@ -469,7 +478,43 @@ The pre-provisioned `nexus-overview` dashboard at `http://localhost:3001` includ
 - **GitHub** — Open PRs, workflow run status
 - **Host Metrics** (via node_exporter) — CPU by mode, memory breakdown, disk I/O, network I/O
 
-Default credentials: `admin` / value of `GRAFANA_PASSWORD` env var.
+Default credentials: `admin` / value of `GRAFANA_PASSWORD` (default `admin`).
+
+### Live dashboard embed (Grafana page)
+
+The **Grafana** page in the Nexus dashboard (`http://localhost:3000`) lets you view Grafana dashboards without leaving the platform:
+
+- **Dashboard card grid** — all dashboards are shown as cards with title, folder, and tags. Click any card to embed it.
+- **Full Dashboard tab** — renders the selected dashboard as a full-width iframe in Grafana kiosk mode (`?kiosk=tv`), auto-refreshing every 30 s.
+- **Panel Grid tab** — fetches the dashboard's panel definitions and renders each panel as an individual iframe via Grafana's `/d-solo/` endpoint. Panels auto-refresh every 30 s.
+- **Height selector** — Compact / Medium / Tall / Full to control the embed height.
+- **Open in Grafana** — direct link opens the dashboard in Grafana's native UI.
+- **Datasource strip** — all configured datasources are shown with type icons; the default datasource is highlighted.
+- **Firing alerts panel** — active Grafana Alertmanager instances are displayed with severity, summary, and a "View" link to the source alert in Grafana.
+
+#### iframe embed requirements
+
+The docker-compose Grafana service is pre-configured for embedding. If you connect an external Grafana instance, ensure the following settings are applied:
+
+```ini
+GF_SECURITY_ALLOW_EMBEDDING=true
+GF_AUTH_ANONYMOUS_ENABLED=true      # or provide credentials another way
+GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+```
+
+Set `GRAFANA_URL` to the **browser-accessible** URL of your Grafana instance (e.g. `https://grafana.example.com`) so both the backend API calls and the dashboard iframes resolve to the same host.
+
+### Alertmanager integration
+
+The background alert monitor polls Grafana for **active firing alert instances** every cycle and ingests them as native Nexus Ops alerts:
+
+- Uses the **Grafana Alertmanager v2 API** (`/api/alertmanager/grafana/api/v2/alerts`) for Grafana 9+ unified alerting.
+- **Falls back to the legacy** `/api/alerts` API for Grafana < 9.
+- Severity is mapped from the alert label (`severity` or `priority`): `critical → critical`, `error/high → high`, `warning/medium → medium`, `info/low → low`. Unknown severity defaults to `high`.
+- De-duplicates using the Grafana fingerprint — an alert is not re-fired if the same fingerprint was already ingested within the past 10 minutes.
+- Ingested alerts are linked to an auto-created incident and appear in the real-time WebSocket feed and the Alerts page.
+
+Requires `GRAFANA_URL` and `GRAFANA_TOKEN` (Viewer-scope service account token is sufficient for alert instances; Admin/Editor is required for provisioned alert rules).
 
 ---
 
