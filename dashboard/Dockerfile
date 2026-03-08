@@ -13,6 +13,9 @@ RUN npm install
 # Copy dashboard source and public assets
 COPY dashboard/src ./src
 COPY dashboard/index.html ./
+# Accept Grafana external URL at build time so Vite bakes it into the bundle
+ARG VITE_GRAFANA_URL=http://localhost:3001
+ENV VITE_GRAFANA_URL=$VITE_GRAFANA_URL
 RUN npm run build
 
 # ─── Runner stage ─────────────────────────────────────────────────────────────

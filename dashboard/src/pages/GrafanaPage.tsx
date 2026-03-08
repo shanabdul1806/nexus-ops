@@ -2,15 +2,25 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { grafanaApi } from '../services/api';
 import { GrafanaDashboard, GrafanaDashboardDetail, GrafanaDatasource, GrafanaHealth, GrafanaAlertInstance } from '@shared/types';
 
+// Resolve Grafana's browser-facing URL at runtime (set via VITE_ build arg or window injection)
+function getGrafanaBase(): string {
+  const win = typeof window !== 'undefined' ? (window as unknown as Record<string, string>) : {};
+  return win.ENV_GRAFANA_URL
+    ?? (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GRAFANA_URL
+    ?? 'http://localhost:3001';
+}
+
 export default function GrafanaPage() {
-  const [health, setHealth] = useState<GrafanaHealth | null>(null);
-  const [dashboards, setDashboards] = useState<GrafanaDashboard[]>([]);
-  const [datasources, setDatasources] = useState<GrafanaDatasource[]>([]);
+  const [health, setHealth]               = useState<GrafanaHealth | null>(null);
+  const [dashboards, setDashboards]       = useState<GrafanaDashboard[]>([]);
+  const [datasources, setDatasources]     = useState<GrafanaDatasource[]>([]);
   const [alertInstances, setAlertInstances] = useState<GrafanaAlertInstance[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [search, setSearch] = useState('');
-  const [selectedDash, setSelectedDash] = useState<string | null>(null);
+  const [loading, setLoading]             = useState(true);
+  const [error, setError]                 = useState('');
+  const [search, setSearch]               = useState('');
+  const [selectedDash, setSelectedDash]   = useState<GrafanaDashboard | null>(null);
+
+  const grafanaBase = getGrafanaBase();
 
   useEffect(() => {
     setLoading(true);
@@ -31,9 +41,6 @@ export default function GrafanaPage() {
   const filtered = dashboards.filter((d) =>
     !search || d.title.toLowerCase().includes(search.toLowerCase()) || d.tags.some((t) => t.includes(search.toLowerCase()))
   );
-
-  const grafanaBase = (typeof window !== 'undefined' ? (window as unknown as Record<string, string>).ENV_GRAFANA_URL : undefined)
-    ?? (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GRAFANA_URL;
 
   return (
     <div>
@@ -76,7 +83,7 @@ export default function GrafanaPage() {
       )}
       {loading && <div style={{ color: '#8b949e', fontSize: 13 }}>Loading Grafana data…</div>}
 
-      {/* Firing Alerts from Grafana Alertmanager */}
+      {/* Firing Alerts */}
       {!loading && alertInstances.length > 0 && (
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -109,15 +116,15 @@ export default function GrafanaPage() {
         </div>
       )}
 
-      {/* Dashboard grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+      {/* Dashboard card grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10, marginBottom: selectedDash ? 16 : 0 }}>
         {filtered.map((dash) => (
           <DashboardCard
             key={dash.uid}
             dash={dash}
             grafanaBase={grafanaBase}
-            expanded={selectedDash === dash.uid}
-            onToggle={() => setSelectedDash(selectedDash === dash.uid ? null : dash.uid)}
+            selected={selectedDash?.uid === dash.uid}
+            onSelect={() => setSelectedDash(selectedDash?.uid === dash.uid ? null : dash)}
           />
         ))}
         {!loading && filtered.length === 0 && (
@@ -126,82 +133,185 @@ export default function GrafanaPage() {
           </div>
         )}
       </div>
+
+      {/* Embedded dashboard view — full width below the grid */}
+      {selectedDash && (
+        <DashboardEmbed
+          dash={selectedDash}
+          grafanaBase={grafanaBase}
+          onClose={() => setSelectedDash(null)}
+        />
+      )}
     </div>
   );
 }
 
-function DashboardCard({ dash, grafanaBase, expanded, onToggle }: {
-  dash: GrafanaDashboard;
-  grafanaBase?: string;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const [detail, setDetail] = useState<GrafanaDashboardDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+// ─── Dashboard Card ───────────────────────────────────────────────────────────
 
-  const load = useCallback(async () => {
+function DashboardCard({ dash, grafanaBase, selected, onSelect }: {
+  dash: GrafanaDashboard;
+  grafanaBase: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const dashUrl = `${grafanaBase}${dash.url}`;
+  return (
+    <div
+      onClick={onSelect}
+      style={{
+        borderRadius: 10, border: `1px solid ${selected ? '#1f6feb' : '#30363d'}`,
+        background: selected ? '#1f2937' : '#161b22',
+        padding: '14px 16px', cursor: 'pointer',
+        transition: 'border-color 0.15s, background 0.15s',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <span style={{ fontSize: 20, flexShrink: 0 }}>📊</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: selected ? '#79c0ff' : '#58a6ff',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {dash.title}
+            </span>
+            {dash.starred && <span style={{ fontSize: 11 }}>⭐</span>}
+          </div>
+          {dash.folderTitle && (
+            <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>📁 {dash.folderTitle}</div>
+          )}
+          {dash.tags.length > 0 && (
+            <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+              {dash.tags.map((t) => (
+                <span key={t} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#1f6feb22', color: '#58a6ff' }}>{t}</span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+          <a href={dashUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+            title="Open in Grafana"
+            style={{ fontSize: 11, color: '#8b949e', textDecoration: 'none' }}>↗</a>
+          <span style={{ fontSize: 10, color: selected ? '#58a6ff' : '#484f58' }}>
+            {selected ? '▲ embedded' : '▼ embed'}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard Embed Panel ────────────────────────────────────────────────────
+
+type EmbedTab = 'dashboard' | 'panels';
+
+function DashboardEmbed({ dash, grafanaBase, onClose }: {
+  dash: GrafanaDashboard;
+  grafanaBase: string;
+  onClose: () => void;
+}) {
+  const [tab, setTab]         = useState<EmbedTab>('dashboard');
+  const [detail, setDetail]   = useState<GrafanaDashboardDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [iframeH, setIframeH] = useState(580);
+
+  const dashEmbedUrl = `${grafanaBase}${dash.url}?kiosk=tv&refresh=30s`;
+  const dashOpenUrl  = `${grafanaBase}${dash.url}`;
+
+  const loadDetail = useCallback(async () => {
     if (detail || detailLoading) return;
     setDetailLoading(true);
-    try {
-      const d = await grafanaApi.getDashboard(dash.uid);
-      setDetail(d);
-    } catch { /* ignore */ }
+    try { setDetail(await grafanaApi.getDashboard(dash.uid)); }
+    catch { /* ignore */ }
     finally { setDetailLoading(false); }
   }, [dash.uid, detail, detailLoading]);
 
-  const handleToggle = () => {
-    if (!expanded) load();
-    onToggle();
-  };
-
-  const dashUrl = grafanaBase ? `${grafanaBase}${dash.url}` : dash.url;
+  useEffect(() => {
+    if (tab === 'panels') loadDetail();
+  }, [tab, loadDetail]);
 
   return (
-    <div style={{ borderRadius: 10, border: '1px solid #30363d', background: '#161b22', overflow: 'hidden' }}>
-      <div style={{ padding: '14px 16px', cursor: 'pointer' }} onClick={handleToggle}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <span style={{ fontSize: 20, flexShrink: 0 }}>📊</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <a href={dashUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-                style={{ fontSize: 13, fontWeight: 700, color: '#58a6ff', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {dash.title}
-              </a>
-              {dash.starred && <span style={{ fontSize: 12 }}>⭐</span>}
-            </div>
-            {dash.folderTitle && (
-              <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>📁 {dash.folderTitle}</div>
-            )}
-            {dash.tags.length > 0 && (
-              <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
-                {dash.tags.map((t) => (
-                  <span key={t} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#1f6feb22', color: '#58a6ff' }}>{t}</span>
-                ))}
-              </div>
-            )}
-          </div>
-          <span style={{ color: '#8b949e', fontSize: 12, flexShrink: 0 }}>{expanded ? '▲' : '▼'}</span>
-        </div>
+    <div style={{ borderRadius: 12, border: '1px solid #1f6feb', background: '#0d1117', overflow: 'hidden' }}>
+      {/* Embed header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#161b22', borderBottom: '1px solid #21262d' }}>
+        <span style={{ fontSize: 16 }}>📊</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: '#e6edf3', flex: 1 }}>{dash.title}</span>
+
+        {/* Tabs */}
+        {(['dashboard', 'panels'] as EmbedTab[]).map((t) => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            padding: '4px 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+            background: tab === t ? '#1f6feb' : '#21262d',
+            color: tab === t ? '#fff' : '#8b949e',
+            border: `1px solid ${tab === t ? '#1f6feb' : '#30363d'}`,
+          }}>
+            {t === 'dashboard' ? '⬛ Full Dashboard' : '▦ Panel Grid'}
+          </button>
+        ))}
+
+        {/* Height control */}
+        <select value={iframeH} onChange={(e) => setIframeH(Number(e.target.value))}
+          style={{ padding: '4px 8px', borderRadius: 6, fontSize: 11, background: '#21262d', color: '#8b949e', border: '1px solid #30363d', cursor: 'pointer' }}>
+          <option value={400}>Compact</option>
+          <option value={580}>Medium</option>
+          <option value={800}>Tall</option>
+          <option value={1100}>Full</option>
+        </select>
+
+        <a href={dashOpenUrl} target="_blank" rel="noreferrer"
+          style={{ fontSize: 12, color: '#58a6ff', textDecoration: 'none', padding: '4px 10px', borderRadius: 6, border: '1px solid #1f6feb44', background: '#1f6feb11' }}>
+          Open in Grafana ↗
+        </a>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px' }}>✕</button>
       </div>
 
-      {expanded && (
-        <div style={{ borderTop: '1px solid #21262d', padding: '12px 16px' }}>
-          {detailLoading && <div style={{ color: '#8b949e', fontSize: 12, textAlign: 'center', padding: '12px 0' }}>Loading panels…</div>}
-          {!detailLoading && detail && (
+      {/* Full dashboard iframe */}
+      {tab === 'dashboard' && (
+        <div style={{ position: 'relative', background: '#0d1117' }}>
+          <iframe
+            src={dashEmbedUrl}
+            style={{ width: '100%', height: iframeH, border: 'none', display: 'block' }}
+            title={`Grafana: ${dash.title}`}
+            allow="fullscreen"
+          />
+        </div>
+      )}
+
+      {/* Panel grid — individual panel iframes */}
+      {tab === 'panels' && (
+        <div style={{ padding: 16 }}>
+          {detailLoading && (
+            <div style={{ color: '#8b949e', fontSize: 13, textAlign: 'center', padding: '40px 0' }}>Loading panels…</div>
+          )}
+          {!detailLoading && detail && detail.panels.length === 0 && (
+            <div style={{ color: '#8b949e', fontSize: 13, textAlign: 'center', padding: '40px 0' }}>No panels found in this dashboard.</div>
+          )}
+          {!detailLoading && detail && detail.panels.length > 0 && (
             <>
-              <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 10 }}>
-                {detail.panels.length} panels · schema v{detail.schemaVersion} · v{detail.version}
+              <div style={{ fontSize: 11, color: '#484f58', marginBottom: 12 }}>
+                {detail.panels.length} panels — each renders live from Grafana · auto-refresh 30s
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto' }}>
-                {detail.panels.map((p) => (
-                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid #21262d' }}>
-                    <span style={{ fontSize: 14, flexShrink: 0 }}>{panelIcon(p.type)}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, color: '#e6edf3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || '(untitled)'}</div>
-                      <div style={{ fontSize: 10, color: '#8b949e', marginTop: 1 }}>{p.type} · {p.gridPos.w}×{p.gridPos.h}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: 12 }}>
+                {detail.panels.map((p) => {
+                  const panelUrl = `${grafanaBase}/d-solo/${dash.uid}?orgId=1&panelId=${p.id}&refresh=30s`;
+                  const panelH = Math.max(180, Math.round((p.gridPos.h / 24) * 500));
+                  return (
+                    <div key={p.id} style={{ borderRadius: 8, border: '1px solid #21262d', overflow: 'hidden', background: '#161b22' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#1c2128', borderBottom: '1px solid #21262d' }}>
+                        <span style={{ fontSize: 13 }}>{panelIcon(p.type)}</span>
+                        <span style={{ fontSize: 11, color: '#e6edf3', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {p.title || '(untitled)'}
+                        </span>
+                        <span style={{ fontSize: 10, color: '#484f58' }}>{p.type}</span>
+                        <a href={`${grafanaBase}${dash.url}?viewPanel=${p.id}`} target="_blank" rel="noreferrer"
+                          style={{ fontSize: 10, color: '#8b949e', textDecoration: 'none' }}>↗</a>
+                      </div>
+                      <iframe
+                        src={panelUrl}
+                        style={{ width: '100%', height: panelH, border: 'none', display: 'block' }}
+                        title={p.title || `Panel ${p.id}`}
+                      />
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
@@ -211,45 +321,28 @@ function DashboardCard({ dash, grafanaBase, expanded, onToggle }: {
   );
 }
 
+// ─── Alert Instance Row ───────────────────────────────────────────────────────
+
 const SEV_COLOR: Record<string, string> = {
   critical: '#f85149', high: '#f85149', medium: '#d29922', low: '#3fb950', info: '#58a6ff',
 };
 
 function AlertInstanceRow({ alert }: { alert: GrafanaAlertInstance }) {
   const color = SEV_COLOR[alert.severity] ?? '#8b949e';
-  const timeAgoStr = (() => {
-    const diff = Date.now() - new Date(alert.startsAt).getTime();
-    const m = Math.floor(diff / 60000);
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
-  })();
+  const diff  = Date.now() - new Date(alert.startsAt).getTime();
+  const m     = Math.floor(diff / 60000);
+  const timeAgoStr = m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago`;
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-      borderRadius: 8, background: '#161b22',
-      border: `1px solid ${color}44`,
-    }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 8, background: '#161b22', border: `1px solid ${color}44` }}>
       <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3' }}>{alert.name}</span>
-          {alert.folder && (
-            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#21262d', color: '#8b949e' }}>
-              {alert.folder}
-            </span>
-          )}
-          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: `${color}22`, color, border: `1px solid ${color}44` }}>
-            {alert.severity}
-          </span>
+          {alert.folder && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#21262d', color: '#8b949e' }}>{alert.folder}</span>}
+          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: `${color}22`, color, border: `1px solid ${color}44` }}>{alert.severity}</span>
         </div>
-        {alert.summary && (
-          <div style={{ fontSize: 12, color: '#8b949e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {alert.summary}
-          </div>
-        )}
+        {alert.summary && <div style={{ fontSize: 12, color: '#8b949e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{alert.summary}</div>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: 11, color: '#8b949e' }}>firing {timeAgoStr}</span>
@@ -263,6 +356,8 @@ function AlertInstanceRow({ alert }: { alert: GrafanaAlertInstance }) {
     </div>
   );
 }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function dsIcon(type: string): string {
   const icons: Record<string, string> = {
