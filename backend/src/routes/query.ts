@@ -7,7 +7,7 @@ import { PortainerConnector } from '../connectors/portainer';
 import { AWSConnector } from '../connectors/aws';
 import { GCPConnector } from '../connectors/gcp';
 import { AzureConnector } from '../connectors/azure';
-import { DataSource } from '../../../shared/types';
+import { DataSource, ContainerHealth } from '../../../shared/types';
 
 const router = Router();
 const agent = new AIAgent();
@@ -79,7 +79,7 @@ router.post('/', async (req: Request, res: Response) => {
               process.env.PORTAINER_TOKEN ?? '',
             );
             const requestedId = parseInt(process.env.PORTAINER_ENDPOINT ?? '0', 10);
-            let containers;
+            let containers: ContainerHealth[];
             if (requestedId === 0) {
               // Auto-discover: collect containers from all online endpoints
               const endpoints = await p.listEndpoints();
