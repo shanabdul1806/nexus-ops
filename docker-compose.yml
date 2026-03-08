@@ -70,9 +70,10 @@ services:
       context: .
       dockerfile: dashboard/Dockerfile
       args:
-        # Browser-facing Grafana URL — used for iframe embeds in the dashboard UI.
-        # Override if Grafana is hosted at a custom domain or port.
-        VITE_GRAFANA_URL: ${VITE_GRAFANA_URL:-http://localhost:3001}
+        # Browser-facing Grafana URL for iframe embeds — reads from GRAFANA_URL so
+        # you only need to set one variable. Defaults to localhost:3001 (the port
+        # mapped by the grafana service below) when running docker-compose locally.
+        VITE_GRAFANA_URL: ${GRAFANA_URL:-http://localhost:3001}
     image: nexus-ops-dashboard:latest
     container_name: nexus-dashboard
     restart: unless-stopped

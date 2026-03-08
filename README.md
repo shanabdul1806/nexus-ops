@@ -260,7 +260,7 @@ All variables are optional except an AI provider key. The backend logs a warning
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GRAFANA_URL` | `http://grafana:3000` | Grafana base URL |
+| `GRAFANA_URL` | see note | Browser-accessible Grafana URL — used for backend API calls **and** dashboard iframe embeds. Leave unset for local docker-compose (the compose file applies the correct internal/external defaults automatically). For an externally hosted Grafana set it to the public URL, e.g. `https://grafana.example.com`. |
 | `GRAFANA_TOKEN` | — | Service account token |
 | `GRAFANA_USER` | `admin` | Admin username (used by compose) |
 | `GRAFANA_PASSWORD` | `change_me_in_production` | Admin password |
