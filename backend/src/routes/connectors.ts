@@ -433,6 +433,20 @@ router.get('/grafana/datasources/:uid', async (req, res) => {
   res.json({ success: true, data: ds, timestamp: new Date().toISOString() });
 });
 
+/** Active alert instances from Grafana Alertmanager (unified alerting + legacy fallback) */
+router.get('/grafana/alert-instances', async (_req, res) => {
+  if (!grafanaConfigured) return notConfigured(res, 'Grafana');
+  const alerts = await grafana.listAlertInstances();
+  res.json({ success: true, data: alerts, timestamp: new Date().toISOString() });
+});
+
+/** Provisioned alert rules (requires Grafana 9+ and Admin/Editor token) */
+router.get('/grafana/alert-rules', async (_req, res) => {
+  if (!grafanaConfigured) return notConfigured(res, 'Grafana');
+  const rules = await grafana.listAlertRules();
+  res.json({ success: true, data: rules, timestamp: new Date().toISOString() });
+});
+
 // ─── AWS ─────────────────────────────────────────────────────────────────────
 
 /** EC2 instances */

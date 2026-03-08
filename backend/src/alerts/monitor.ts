@@ -8,6 +8,7 @@ import { PortainerConnector } from '../connectors/portainer';
 import { AWSConnector } from '../connectors/aws';
 import { GCPConnector } from '../connectors/gcp';
 import { AzureConnector } from '../connectors/azure';
+import { GrafanaConnector } from '../connectors/grafana';
 import { AnomalyDetector } from '../ai/anomalyDetection';
 import { AIAgent } from '../ai/agent';
 import { AlertRule, Alert, DataSource } from '../../../shared/types';
@@ -32,6 +33,10 @@ export class AlertMonitor {
     process.env.KIBANA_PASSWORD ?? '',
     process.env.KIBANA_INDEX || 'logs-*',
   );
+  private readonly grafana = new GrafanaConnector(
+    process.env.GRAFANA_URL || 'http://grafana:3000',
+    process.env.GRAFANA_TOKEN ?? '',
+  );
 
   constructor(private readonly wss: WebSocketServer) {}
 
@@ -50,6 +55,9 @@ export class AlertMonitor {
       this.safeGetErrorTrends(),
       this.safeGetCloudMetrics(),
     ]);
+
+    // Ingest Grafana Alertmanager alerts directly (parallel, independent of rule-based flow)
+    await this.safeIngestGrafanaAlerts();
 
     // Anomaly detection across all sources
     const anomalies = await this.detector.detectAll({ containers, builds, errorTrends });
@@ -245,5 +253,72 @@ export class AlertMonitor {
     }
 
     return metrics;
+  }
+
+  /**
+   * Fetch active Grafana Alertmanager instances and ingest each firing alert
+   * directly into the platform — bypassing the threshold-rule system because
+   * Grafana has already evaluated its own rules.
+   */
+  private async safeIngestGrafanaAlerts(): Promise<void> {
+    if (!process.env.GRAFANA_URL || !process.env.GRAFANA_TOKEN) return;
+    try {
+      const instances = await this.grafana.listAlertInstances();
+      const firing = instances.filter((i) => i.state === 'active' || i.state === 'unprocessed');
+
+      for (const instance of firing) {
+        // Use fingerprint as a stable dedup key (rule_id column)
+        const ruleId = `grafana:${instance.fingerprint}`;
+        const recent = db.prepare(
+          `SELECT id FROM alerts WHERE rule_id = ? AND triggered_at > datetime('now', '-10 minutes') AND resolved_at IS NULL LIMIT 1`,
+        ).get(ruleId);
+        if (recent) continue;
+
+        const alert: Alert = {
+          id: uuidv4(),
+          ruleId,
+          ruleName: instance.name,
+          severity: instance.severity,
+          source: 'grafana',
+          message: instance.summary || instance.name,
+          value: 1,
+          threshold: 0,
+          triggeredAt: instance.startsAt,
+          acknowledged: false,
+        };
+
+        db.prepare(
+          `INSERT INTO alerts (id, rule_id, rule_name, severity, source, message, value, threshold, triggered_at)
+           VALUES (?,?,?,?,?,?,?,?,?)`,
+        ).run(
+          alert.id, alert.ruleId, alert.ruleName, alert.severity,
+          alert.source, alert.message, alert.value, alert.threshold,
+          alert.triggeredAt,
+        );
+
+        // Auto-create matching incident
+        const incId = `inc-${alert.id}`;
+        const folder = instance.folder ? `[${instance.folder}] ` : '';
+        db.prepare(`
+          INSERT OR IGNORE INTO incidents
+            (id, title, summary, severity, status, root_cause, fixes_json, correlations_json, affected_services_json, tags_json)
+          VALUES (?, ?, ?, ?, 'open', ?, '[]', '[]', ?, ?)
+        `).run(
+          incId,
+          `${folder}${instance.name}`,
+          instance.summary || instance.name,
+          instance.severity,
+          `Grafana alert "${instance.name}" is firing. ${instance.summary}`,
+          JSON.stringify(['grafana']),
+          JSON.stringify(['grafana', instance.severity, ...(instance.folder ? [instance.folder] : [])]),
+        );
+
+        alertsTotal.inc({ severity: alert.severity, source: 'grafana' });
+        this.broadcast({ type: 'alert', data: alert });
+        logger.warn(`Grafana alert ingested: ${instance.name}`, { fingerprint: instance.fingerprint, severity: instance.severity });
+      }
+    } catch (err) {
+      logger.debug('Grafana alert ingestion failed', { err });
+    }
   }
 }

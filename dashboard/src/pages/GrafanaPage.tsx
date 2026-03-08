@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { grafanaApi } from '../services/api';
-import { GrafanaDashboard, GrafanaDashboardDetail, GrafanaDatasource, GrafanaHealth } from '@shared/types';
+import { GrafanaDashboard, GrafanaDashboardDetail, GrafanaDatasource, GrafanaHealth, GrafanaAlertInstance } from '@shared/types';
 
 export default function GrafanaPage() {
   const [health, setHealth] = useState<GrafanaHealth | null>(null);
   const [dashboards, setDashboards] = useState<GrafanaDashboard[]>([]);
   const [datasources, setDatasources] = useState<GrafanaDatasource[]>([]);
+  const [alertInstances, setAlertInstances] = useState<GrafanaAlertInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -17,10 +18,12 @@ export default function GrafanaPage() {
       grafanaApi.health().catch(() => null),
       grafanaApi.listDashboards().catch(() => [] as GrafanaDashboard[]),
       grafanaApi.listDatasources().catch(() => [] as GrafanaDatasource[]),
-    ]).then(([h, d, ds]) => {
+      grafanaApi.listAlertInstances().catch(() => [] as GrafanaAlertInstance[]),
+    ]).then(([h, d, ds, ai]) => {
       setHealth(h);
       setDashboards(d);
       setDatasources(ds);
+      setAlertInstances(ai);
       if (!h) setError('Could not reach Grafana. Check GRAFANA_URL and GRAFANA_TOKEN.');
     }).finally(() => setLoading(false));
   }, []);
@@ -52,6 +55,11 @@ export default function GrafanaPage() {
           </div>
           <p style={{ fontSize: 13, color: '#8b949e', margin: '4px 0 0' }}>
             {dashboards.length} dashboards · {datasources.length} datasources
+            {alertInstances.length > 0 && (
+              <span style={{ color: '#f85149', marginLeft: 6 }}>
+                · {alertInstances.length} firing alert{alertInstances.length !== 1 ? 's' : ''}
+              </span>
+            )}
           </p>
         </div>
         <input
@@ -67,6 +75,21 @@ export default function GrafanaPage() {
         </div>
       )}
       {loading && <div style={{ color: '#8b949e', fontSize: 13 }}>Loading Grafana data…</div>}
+
+      {/* Firing Alerts from Grafana Alertmanager */}
+      {!loading && alertInstances.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 16 }}>🔔</span> Firing Alerts
+            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 10, background: '#f8514922', color: '#f85149', border: '1px solid #f8514944' }}>
+              {alertInstances.length} active
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {alertInstances.map((a) => <AlertInstanceRow key={a.fingerprint} alert={a} />)}
+          </div>
+        </div>
+      )}
 
       {/* Datasources strip */}
       {!loading && datasources.length > 0 && (
@@ -184,6 +207,59 @@ function DashboardCard({ dash, grafanaBase, expanded, onToggle }: {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const SEV_COLOR: Record<string, string> = {
+  critical: '#f85149', high: '#f85149', medium: '#d29922', low: '#3fb950', info: '#58a6ff',
+};
+
+function AlertInstanceRow({ alert }: { alert: GrafanaAlertInstance }) {
+  const color = SEV_COLOR[alert.severity] ?? '#8b949e';
+  const timeAgoStr = (() => {
+    const diff = Date.now() - new Date(alert.startsAt).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  })();
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+      borderRadius: 8, background: '#161b22',
+      border: `1px solid ${color}44`,
+    }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3' }}>{alert.name}</span>
+          {alert.folder && (
+            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: '#21262d', color: '#8b949e' }}>
+              {alert.folder}
+            </span>
+          )}
+          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, background: `${color}22`, color, border: `1px solid ${color}44` }}>
+            {alert.severity}
+          </span>
+        </div>
+        {alert.summary && (
+          <div style={{ fontSize: 12, color: '#8b949e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {alert.summary}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <span style={{ fontSize: 11, color: '#8b949e' }}>firing {timeAgoStr}</span>
+        {alert.generatorURL && (
+          <a href={alert.generatorURL} target="_blank" rel="noreferrer"
+            style={{ fontSize: 11, color: '#58a6ff', textDecoration: 'none', padding: '2px 8px', borderRadius: 4, border: '1px solid #1f6feb44', background: '#1f6feb11' }}>
+            View →
+          </a>
+        )}
+      </div>
     </div>
   );
 }

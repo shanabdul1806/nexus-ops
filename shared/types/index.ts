@@ -2,7 +2,7 @@
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type IncidentStatus = 'open' | 'investigating' | 'resolved' | 'suppressed';
-export type DataSource = 'jenkins' | 'kibana' | 'github' | 'portainer' | 'aws' | 'gcp' | 'azure';
+export type DataSource = 'jenkins' | 'kibana' | 'github' | 'portainer' | 'aws' | 'gcp' | 'azure' | 'grafana';
 
 // ─── Build / CI ──────────────────────────────────────────────────────────────
 
@@ -454,6 +454,32 @@ export interface GrafanaHealth {
   commit: string;
   database: 'ok' | 'degraded';
   version: string;
+}
+
+/** A single active alert instance returned by Grafana Alertmanager */
+export interface GrafanaAlertInstance {
+  fingerprint: string;          // unique hash for this alert
+  name: string;                 // alertname label
+  state: 'active' | 'suppressed' | 'unprocessed';
+  severity: Severity;           // mapped from labels.severity
+  summary: string;              // annotations.summary or annotations.description
+  labels: Record<string, string>;
+  annotations: Record<string, string>;
+  startsAt: string;             // ISO timestamp when alert fired
+  generatorURL: string;         // deep link back into Grafana
+  folder?: string;              // grafana_folder label if present
+}
+
+/** A Grafana unified-alerting rule (from provisioning API) */
+export interface GrafanaAlertRule {
+  uid: string;
+  title: string;
+  condition: string;
+  folderUID: string;
+  ruleGroup: string;
+  noDataState: string;
+  execErrState: string;
+  isPaused: boolean;
 }
 
 // ─── AWS ──────────────────────────────────────────────────────────────────────

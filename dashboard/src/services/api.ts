@@ -6,6 +6,7 @@ import {
   PortainerEndpoint, EndpointSummary, ContainerHealth,
   PrometheusInstantResult, PrometheusRangeResult,
   GrafanaDashboard, GrafanaDashboardDetail, GrafanaDatasource, GrafanaHealth,
+  GrafanaAlertInstance, GrafanaAlertRule,
   AWSEC2Instance, AWSECSCluster, AWSECSService, AWSLambdaFunction, AWSCostSummary, AWSCostItem,
   GCPInstance, GKECluster, CloudRunService, GCPLogEntry,
   AzureVM, AzureAKSCluster, AzureCostSummary,
@@ -208,6 +209,14 @@ export const grafanaApi = {
   listDatasources: () =>
     api.get('/api/connectors/grafana/datasources')
       .then((r) => r.data.data as GrafanaDatasource[]),
+
+  listAlertInstances: () =>
+    api.get('/api/connectors/grafana/alert-instances')
+      .then((r) => r.data.data as GrafanaAlertInstance[]),
+
+  listAlertRules: () =>
+    api.get('/api/connectors/grafana/alert-rules')
+      .then((r) => r.data.data as GrafanaAlertRule[]),
 };
 
 // ─── AWS ──────────────────────────────────────────────────────────────────────
