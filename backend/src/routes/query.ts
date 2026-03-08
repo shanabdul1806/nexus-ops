@@ -29,8 +29,12 @@ router.post('/', async (req: Request, res: Response) => {
       try {
         switch (src) {
           case 'jenkins': {
+            if (!process.env.JENKINS_URL) {
+              context.push({ source: 'jenkins', summary: 'Jenkins not configured', data: null });
+              break;
+            }
             const j = new JenkinsConnector(
-              process.env.JENKINS_URL ?? 'http://jenkins:8080',
+              process.env.JENKINS_URL,
               process.env.JENKINS_USER ?? 'admin',
               process.env.JENKINS_TOKEN ?? '',
             );
@@ -41,8 +45,12 @@ router.post('/', async (req: Request, res: Response) => {
             break;
           }
           case 'kibana': {
+            if (!process.env.KIBANA_URL) {
+              context.push({ source: 'kibana', summary: 'Kibana not configured', data: null });
+              break;
+            }
             const k = new KibanaConnector(
-              process.env.KIBANA_URL ?? 'http://kibana:5601',
+              process.env.KIBANA_URL,
               process.env.KIBANA_USER ?? 'elastic',
               process.env.KIBANA_PASSWORD ?? '',
               process.env.KIBANA_INDEX ?? 'logs-*',
@@ -62,12 +70,29 @@ router.post('/', async (req: Request, res: Response) => {
             break;
           }
           case 'portainer': {
+            if (!process.env.PORTAINER_URL) {
+              context.push({ source: 'portainer', summary: 'Portainer not configured', data: null });
+              break;
+            }
             const p = new PortainerConnector(
-              process.env.PORTAINER_URL ?? 'http://portainer:9000',
+              process.env.PORTAINER_URL,
               process.env.PORTAINER_TOKEN ?? '',
-              parseInt(process.env.PORTAINER_ENDPOINT ?? '1', 10),
             );
-            const containers = await p.getContainers();
+            const requestedId = parseInt(process.env.PORTAINER_ENDPOINT ?? '0', 10);
+            let containers;
+            if (requestedId === 0) {
+              // Auto-discover: collect containers from all online endpoints
+              const endpoints = await p.listEndpoints();
+              const online = endpoints.filter((e) => e.status === 1);
+              if (online.length === 0) {
+                containers = [];
+              } else {
+                const perEndpoint = await Promise.all(online.map((ep) => p.getContainersForEndpoint(ep.id, ep.name)));
+                containers = perEndpoint.flat();
+              }
+            } else {
+              containers = await p.getContainersForEndpoint(requestedId);
+            }
             context.push({ source: 'portainer', summary: `${containers.length} containers. Unhealthy: ${containers.filter((c) => c.health === 'unhealthy').length}, High mem: ${containers.filter((c) => c.memoryPercent > 80).length}`, data: containers });
             break;
           }
